@@ -1,8 +1,12 @@
-package avp
+package avp_test
 
-import "testing"
+import (
+	"testing"
 
-var t1Formats = Formats{
+	"github.com/nilsocket/avp"
+)
+
+var t1Formats = avp.Formats{
 	{Resolution: 1080, AudioBitrate: 196},
 	{Resolution: 4320},
 	{Resolution: 2160},
@@ -12,7 +16,7 @@ var t1Formats = Formats{
 	{AudioBitrate: 128},
 }
 
-var t1Result = map[Quality]Formats{
+var t1Result = map[avp.Quality]avp.Formats{
 	1: {
 		{AudioBitrate: 316},
 		{Resolution: 4320},
@@ -31,32 +35,43 @@ var t1Result = map[Quality]Formats{
 }
 
 func TestAll(t *testing.T) {
-	avp := New(t1Formats)
-	check(t, avp.qltMap, t1Result)
+	a := avp.New(t1Formats)
+	check(t, a, t1Result)
 }
 
-func check(t *testing.T, got, res map[Quality]Formats) {
-	for i, g := range got {
-		equal(t, g, res[i])
+func TestResolutionToInt(t *testing.T) {
+	resolutionInput := []string{"1920x1080", "720p"}
+	expectedOutput := []int{1080, 720}
+
+	for i, ri := range resolutionInput {
+		res, _ := avp.ResolutionToInt(ri)
+		if expectedOutput[i] != res {
+			t.Error("Expected:", expectedOutput[i], "Got:", res, "For:", ri)
+		}
 	}
+
 }
 
-func equal(t *testing.T, a, b Formats) bool {
+func check(t *testing.T, got *avp.AVP, res map[avp.Quality]avp.Formats) {
+	equal(t, got.Best(), res[1])
+	equal(t, got.High(), res[2])
+	equal(t, got.Medium(), res[3])
+	equal(t, got.Low(), res[4])
+}
+
+func equal(t *testing.T, a, b avp.Formats) {
 	if len(a) != len(b) {
-		return false
+		t.Error("Expected len(a) == len(b), but len(a)=", a, "len(b)=", b)
 	}
 
 	for i, aa := range a {
 		if !fmtEqual(aa, b[i]) {
 			t.Error("Expected:", b[i], "Got:", aa)
-			return false
 		}
 	}
-
-	return true
 }
 
-func fmtEqual(a, b *Format) bool {
+func fmtEqual(a, b *avp.Format) bool {
 	// video
 	if a.Resolution != b.Resolution || a.VideoCodec != b.VideoCodec || a.VideoBitrate != b.VideoBitrate || a.VideoHDR != b.VideoHDR || a.VideoHFR != b.VideoHDR {
 		return false

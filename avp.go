@@ -1,9 +1,11 @@
 package avp
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -122,22 +124,9 @@ const (
 	Low
 )
 
-// OfQuality is helper to give formats of particular quality
-func (avp *AVP) OfQuality(qlty Quality) Formats {
-	return avp.qltMap[qlty]
-}
-
-var qMap = map[string]Quality{
-	"best":   Best,
-	"high":   High,
-	"medium": Medium,
-	"low":    Low,
-}
-
-// QualityType converts strings like `best`, `high`, ...
-// to respective Quality type
-func QualityType(s string) Quality {
-	return qMap[strings.ToLower(s)]
+// Map segregated based on quality
+func (avp *AVP) Map() map[Quality]Formats {
+	return avp.qltMap
 }
 
 // Weight = Resolution*10 + VideoBitrate + 100*VideoCodec + 1000 + 1000
@@ -168,12 +157,15 @@ func finalSelect(avpfs, aopfs, vopfs []Formats, m map[Quality]Formats) {
 }
 
 func selectForSection(id int, avpfs, aopfs, vopfs []Formats) Formats {
-	avf, aof, vof := someFormat(id, avpfs), someFormat(id, aopfs), someFormat(id, vopfs)
+
+	avfJump, avf := someFormat(id, avpfs)
+	aofJump, aof := someFormat(id, aopfs)
+	vofJump, vof := someFormat(id, vopfs)
 
 	avgf, aogf, vogf := avf != nil, aof != nil, vof != nil
 
 	if avgf && aogf && vogf {
-		return best(avf, aof, vof)
+		return best(avf, aof, vof, avfJump, aofJump, vofJump)
 	} else if avgf && ((!aogf && !vogf) || (!aogf && vogf) || (aogf && !vogf)) {
 		return Formats{avf}
 	} else if !avgf && aogf && vogf {
@@ -187,14 +179,32 @@ func selectForSection(id int, avpfs, aopfs, vopfs []Formats) Formats {
 	return Formats{}
 }
 
-func best(av, ao, vo *Format) Formats {
+func best(av, ao, vo *Format, avJump, aoJump, voJump int) Formats {
+	// we are said to select only, when av, ao, vo were available
+	// Incase we went out of required selection category (i.e.,Jumped)
+	// We need to return least Jumped, without comparing.
+	// If we haven't Jumped, then we can compare weights
+
+	indJump := float64(aoJump + voJump)
+
+	if indJump != 0 {
+		indJump /= 2
+	}
+
+	if float64(avJump) > indJump {
+		return Formats{ao, vo}
+	} else if float64(avJump) < indJump {
+		return Formats{av}
+	}
+
 	if weight(av) < weight(ao)+weight(vo) {
 		return Formats{ao, vo}
 	}
 	return Formats{av}
+
 }
 
-func someFormat(id int, pfs []Formats) *Format {
+func someFormat(id int, pfs []Formats) (int, *Format) {
 	// 0, downward - ++
 	// i.e., we move from best, high, medium, low
 	// since we are moving downward, we use `bestof()`
@@ -205,14 +215,24 @@ func someFormat(id int, pfs []Formats) *Format {
 	// if medium and low are empty
 	// we need `leastof()` from high, ...
 
-	if res := selectFormat(id, 0, pfs); res != nil {
-		return res
+	// tid-id represents the jump selectFormat() have taken to provide
+	// this format.
+	if tid, res := selectFormat(id, 0, pfs); res != nil {
+		return abs(tid - id), res
 	}
 
-	return selectFormat(id, 1, pfs)
+	tid, res := selectFormat(id, 1, pfs)
+	return abs(tid - id), res
 }
 
-func selectFormat(id, motion int, pfs []Formats) *Format {
+func abs(a int) int {
+	if a > 0 {
+		return a
+	}
+	return -a
+}
+
+func selectFormat(id, motion int, pfs []Formats) (int, *Format) {
 	var fn func(fs Formats) *Format
 	var op func()
 
@@ -227,11 +247,11 @@ func selectFormat(id, motion int, pfs []Formats) *Format {
 	for ; id > 0 && id < 5; op() {
 		res := fn(pfs[id])
 		if res != nil {
-			return res
+			return id, res
 		}
 	}
 
-	return nil
+	return 0, nil
 }
 
 func bestof(fs Formats) *Format {
@@ -290,9 +310,9 @@ func videoOnly(f *Format) bool {
 
 func segregateByProfile(fs Formats, p Profile) []Formats {
 
-	// 0 - None
-	// 1 - best
-	// 2 - high
+	// 0 = None
+	// 1 = best
+	// 2 = high
 	// 3 = medium
 	// 4 = low
 	profileMatchers := make([]Formats, 5)
@@ -338,13 +358,13 @@ func match(curProfile, nextProfile, f *Format) *Format {
 	}
 
 	if curProfile.Resolution != 0 && f.Resolution != 0 {
-		if f.Resolution > curProfile.Resolution || f.Resolution < nextProfile.Resolution {
+		if f.Resolution > curProfile.Resolution || f.Resolution <= nextProfile.Resolution {
 			return nil
 		}
 	}
 
 	if curProfile.VideoBitrate != 0 && f.VideoBitrate != 0 {
-		if f.VideoBitrate > curProfile.VideoBitrate {
+		if f.VideoBitrate > curProfile.VideoBitrate || f.VideoBitrate <= nextProfile.VideoBitrate {
 			return nil
 		}
 	}
@@ -362,13 +382,13 @@ func match(curProfile, nextProfile, f *Format) *Format {
 	}
 
 	if curProfile.AudioBitrate != 0 && f.AudioBitrate != 0 {
-		if f.AudioBitrate > curProfile.AudioBitrate || f.AudioBitrate < nextProfile.AudioBitrate {
+		if f.AudioBitrate > curProfile.AudioBitrate || f.AudioBitrate <= nextProfile.AudioBitrate {
 			return nil
 		}
 	}
 
 	if curProfile.AudioChannels != 0 && f.AudioChannels != 0 {
-		if f.AudioChannels != curProfile.AudioChannels {
+		if f.AudioChannels != curProfile.AudioChannels || f.AudioChannels <= nextProfile.AudioChannels {
 			return nil
 		}
 	}
@@ -420,4 +440,17 @@ func (fs formats) String() string {
 		str += fmt.Sprintf("%v\n", f)
 	}
 	return str
+}
+
+// ResolutionToInt converts:
+// "1920x1080" -> 1080
+// "1080p" -> 1080
+func ResolutionToInt(resolution string) (int, error) {
+	if i := strings.Index(resolution, "x"); i != -1 {
+		return strconv.Atoi(resolution[i+1:])
+	} else if i := strings.Index(resolution, "p"); i != -1 {
+		return strconv.Atoi(resolution[:i])
+	}
+
+	return 0, errors.New("Unsupported string passed for ResolutionToInt()")
 }
