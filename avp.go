@@ -454,3 +454,20 @@ func ResolutionToInt(resolution string) (int, error) {
 
 	return 0, errors.New("Unsupported string passed for ResolutionToInt()")
 }
+
+// StringToQuality converts string like "high", "Best", ...
+// to avp.High, avp.Best , ... respectively
+func StringToQuality(q string) Quality {
+	switch strings.ToLower(q) {
+	case "best":
+		return Best
+	case "high":
+		return High
+	case "medium":
+		return Medium
+	case "low":
+		return Low
+	}
+
+	return None
+}
